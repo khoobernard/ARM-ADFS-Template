@@ -1,0 +1,1132 @@
+﻿{
+    "$schema": "https://schema.management.azure.com/schemas/2015-01-01/deploymentTemplate.json#",
+    "contentVersion": "1.0.0.0",
+  "parameters": {
+    "storageType": {
+      "type": "string",
+      "defaultValue": "Standard_LRS",
+      "allowedValues": [
+        "Standard_LRS",
+        "Standard_GRS"
+      ]
+    },
+    "adfsVmSize": {
+      "type": "string",
+      "defaultValue": "Standard_A1",
+      "allowedValues": [
+        "Standard_A1",
+        "Standard_A2",
+        "Standard_A3",
+        "Standard_A4",
+        "Standard_A5",
+        "Standard_A6",
+        "Standard_A7",
+        "A8",
+        "A9",
+        "A10",
+        "A11",
+        "D1",
+        "D2",
+        "D3",
+        "D4",
+        "D5",
+        "D6",
+        "D7",
+        "D8",
+        "D9",
+        "D10",
+        "D11",
+        "D12",
+        "D13",
+        "D14",
+        "D1v2",
+        "D2v2",
+        "D3v2",
+        "D4v2",
+        "D5v2",
+        "D6v2",
+        "D7v2",
+        "D8v2",
+        "D9v2",
+        "D10v2",
+        "D11v2",
+        "D12v2",
+        "D13v2",
+        "D14v2",
+        "D15v2"
+      ]
+    },
+    "adminUserName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "adminPassword": {
+      "type": "securestring"
+    },
+    "windowsOSVersion": {
+      "type": "string",
+      "defaultValue": "2012-R2-Datacenter",
+      "allowedValues": [
+        "2008-R2-SP1",
+        "2012-Datacenter",
+        "2012-R2-Datacenter"
+      ]
+    },
+    "ServerPrefix": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4,
+      "defaultValue": "adfs"
+    },
+    "NumberOfProxyServers": {
+      "type": "int",
+      "minValue": 1,
+      "defaultValue": 2
+    },
+    "NumberOfADFSServers": {
+      "type": "int",
+      "minValue": 1,
+      "defaultValue": 2
+    },
+    "NumberOfDCs": {
+      "type": "int",
+      "minValue": 1,
+      "defaultValue": 2
+    },
+    "dnsNameforProxy": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 60,
+      "metadata": {
+        "description": "Unique DNS name for public ADFS Proxy"
+      }
+    }
+  },
+  "variables": {
+    "adfsstorageName": "[concat(parameters('ServerPrefix'),'storage', uniqueString(resourceGroup().id))]",
+    "adfsvnetPrefix": "10.0.0.0/16",
+    "adfsvnetSubnet1Name": "Proxy",
+    "adfsvnetSubnet1Prefix": "10.0.0.0/24",
+    "adfsvnetSubnet2Name": "ADFS",
+    "adfsvnetSubnet2Prefix": "10.0.1.0/24",
+    "adfsvnetSubnet3Name": "AD",
+    "adfsvnetSubnet3Prefix": "10.0.2.0/24",
+    "adfsvnetSubnet4Name": "Management",
+    "adfsvnetSubnet4Prefix": "10.0.3.0/24",
+    "adfsImagePublisher": "MicrosoftWindowsServer",
+    "adfsImageOffer": "WindowsServer",
+    "adfsStorageAccountContainerName": "vhds",
+    "vnetID": "[resourceId('Microsoft.Network/virtualNetworks', 'adfsvnet')]",
+    "proxySubnetRef": "[concat(variables('vnetID'), '/subnets/', variables('adfsvnetSubnet1Name'))]",
+    "proxyOSDiskName": "[concat(parameters('ServerPrefix'),'proxyOSDisk')]",
+    "adfsSubnetRef": "[concat(variables('vnetID'), '/subnets/', variables('adfsvnetSubnet2Name'))]",
+    "adfsOSDiskName": "[concat(parameters('ServerPrefix'),'adfsOSDisk')]",
+    "dcSubnetRef": "[concat(variables('vnetID'), '/subnets/', variables('adfsvnetSubnet3Name'))]",
+    "dcOSDiskName": "[concat(parameters('ServerPrefix'),'dcOSDisk')]",
+    "mgmtSubnetRef": "[concat(variables('vnetID'), '/subnets/', variables('adfsvnetSubnet4Name'))]",
+    "mgmtOSDiskName": "[concat(parameters('ServerPrefix'),'mgmtOSDisk')]",
+    "publicIPAddressType": "Dynamic",
+    "publicIPAddressName": "[concat(parameters('ServerPrefix'),'proxypublicip')]",
+    "publicIPAddressID": "[resourceId('Microsoft.Network/publicIPAddresses',variables('publicIPAddressName'))]",
+    "frontEndLoadBalancerName": "[concat(parameters('ServerPrefix'),'proxylb')]",
+    "frontEndLoadBalancerId": "[resourceId('Microsoft.Network/loadBalancers',variables('frontEndLoadBalancerName'))]",
+    "frontEndLoadBalancerIPConfigID": "[concat(variables('frontEndLoadBalancerId'),'/frontendIPConfigurations/loadBalancerFrontend')]",
+    "internalLoadBalancerName": "[concat(parameters('ServerPrefix'),'internallb')]",
+    "internalLoadBalancerId": "[resourceId('Microsoft.Network/loadBalancers',variables('internalLoadBalancerName'))]",
+    "internalLoadBalancerIdIPConfigId": "[concat(variables('internalLoadBalancerId'),'/frontendIPConfigurations/loadBalancerFrontend')]"
+  },
+  "resources": [
+    {
+      "name": "[variables('adfsstorageName')]",
+      "type": "Microsoft.Storage/storageAccounts",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "dependsOn": [ ],
+      "tags": {
+        "displayName": "adfsstorage"
+      },
+      "properties": {
+        "accountType": "[parameters('storageType')]"
+      }
+    },
+    {
+      "type": "Microsoft.Compute/availabilitySets",
+      "name": "adfsfsp",
+      "apiVersion": "2015-06-15",
+      "location": "[resourceGroup().location]",
+      "properties": { }
+    },
+    {
+      "type": "Microsoft.Compute/availabilitySets",
+      "name": "adfsfs",
+      "apiVersion": "2015-06-15",
+      "location": "[resourceGroup().location]",
+      "properties": { }
+    },
+    {
+      "type": "Microsoft.Compute/availabilitySets",
+      "name": "adfsdc",
+      "apiVersion": "2015-06-15",
+      "location": "[resourceGroup().location]",
+      "properties": { }
+    },
+    {
+      "apiVersion": "2015-06-15",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "name": "RDPPublicIP",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "publicIPAllocationMethod": "[variables('publicIPAddressType')]"
+      },
+      "tags": {
+        "displayName": "RDP Public IP"
+      }
+    },
+    {
+      "apiVersion": "2015-06-15",
+      "type": "Microsoft.Network/publicIPAddresses",
+      "name": "[variables('publicIPAddressName')]",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "publicIPAllocationMethod": "[variables('publicIPAddressType')]",
+        "dnsSettings": {
+          "domainNameLabel": "[parameters('dnsNameforProxy')]"
+        }
+      },
+      "tags": {
+        "displayName": "Public IP"
+      }
+    },
+    {
+      "name": "adfsvnet",
+      "type": "Microsoft.Network/virtualNetworks",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "dependsOn": [
+        "Microsoft.Network/networkSecurityGroups/proxyNSG",
+        "Microsoft.Network/networkSecurityGroups/adfsNSG",
+        "Microsoft.Network/networkSecurityGroups/dcNSG",
+        "Microsoft.Network/networkSecurityGroups/mgmtNSG"
+      ],
+      "tags": {
+        "displayName": "adfsvnet"
+      },
+      "properties": {
+        "addressSpace": {
+          "addressPrefixes": [
+            "[variables('adfsvnetPrefix')]"
+          ]
+        },
+        "subnets": [
+          {
+            "name": "[variables('adfsvnetSubnet1Name')]",
+            "properties": {
+              "addressPrefix": "[variables('adfsvnetSubnet1Prefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups','proxyNSG')]"
+              }
+            }
+          },
+          {
+            "name": "[variables('adfsvnetSubnet2Name')]",
+            "properties": {
+              "addressPrefix": "[variables('adfsvnetSubnet2Prefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups','adfsNSG')]"
+              }
+            }
+          },
+          {
+            "name": "[variables('adfsvnetSubnet3Name')]",
+            "properties": {
+              "addressPrefix": "[variables('adfsvnetSubnet3Prefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups','dcNSG')]"
+              }
+            }
+          },
+          {
+            "name": "[variables('adfsvnetSubnet4Name')]",
+            "properties": {
+              "addressPrefix": "[variables('adfsvnetSubnet4Prefix')]",
+              "networkSecurityGroup": {
+                "id": "[resourceId('Microsoft.Network/networkSecurityGroups','mgmtNSG')]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "[concat(parameters('ServerPrefix'),copyIndex(),'ProxyNetworkInterface')]",
+      "type": "Microsoft.Network/networkInterfaces",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "copy": {
+        "name": "adfsproxyniccopy",
+        "count": "[parameters('NumberOfProxyServers')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Network/virtualNetworks/', 'adfsvnet')]",
+        "[concat('Microsoft.Network/loadBalancers/',variables('frontEndLoadBalancerName'))]"
+      ],
+      "tags": {
+        "displayName": "Proxy Network Interface"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[variables('proxySubnetRef')]"
+              },
+              "loadBalancerBackendAddressPools": [
+                {
+                  "id": "[concat(variables('frontEndLoadBalancerId'), '/backendAddressPools/LoadBalancerBackend')]"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "[concat(parameters('ServerPrefix'),copyIndex(),'ProxyServer')]",
+      "type": "Microsoft.Compute/virtualMachines",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "copy": {
+        "name": "adfsproxycopy",
+        "count": "[parameters('NumberOfProxyServers')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Storage/storageAccounts/', variables('adfsstorageName'))]",
+        "[concat('Microsoft.Network/networkInterfaces/',parameters('ServerPrefix'),copyIndex(),'ProxyNetworkInterface')]",
+        "[concat('Microsoft.Compute/availabilitySets/','adfsfsp')]"
+      ],
+      "tags": {
+        "displayName": "Proxy Server"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('adfsVmSize')]"
+        },
+        "availabilitySet": {
+          "id": "[resourceId('Microsoft.Compute/availabilitySets','adfsfsp')]"
+        },
+        "osProfile": {
+          "computerName": "[concat(parameters('ServerPrefix'),'Proxy',copyIndex())]",
+          "adminUsername": "[parameters('adminUserName')]",
+          "adminPassword": "[parameters('adminPassword')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('adfsImagePublisher')]",
+            "offer": "[variables('adfsImageOffer')]",
+            "sku": "[parameters('windowsOSVersion')]",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "fsp1vmOSDisk",
+            "vhd": {
+              "uri": "[concat('https://', variables('adfsstorageName'), '.blob.core.windows.net/', variables('adfsStorageAccountContainerName'), '/', variables('proxyOSDiskName'),copyIndex(), '.vhd')]"
+            },
+            "caching": "ReadWrite",
+            "createOption": "FromImage"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(parameters('ServerPrefix'),copyIndex(),'ProxyNetworkInterface'))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "[concat(parameters('ServerPrefix'),copyIndex(),'ADFSNetworkInterface')]",
+      "type": "Microsoft.Network/networkInterfaces",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "copy": {
+        "name": "adfsniccopy",
+        "count": "[parameters('NumberOfADFSServers')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Network/virtualNetworks/', 'adfsvnet')]",
+        "[concat('Microsoft.Network/loadBalancers/',variables('internalLoadBalancerName'))]"
+      ],
+      "tags": {
+        "displayName": "ADFS Network Interface"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[variables('adfsSubnetRef')]"
+              },
+              "loadBalancerBackendAddressPools": [
+                {
+                  "id": "[concat(variables('internalLoadBalancerId'),'/backendAddressPools/ADFSLoadBalancerBackend')]"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "[concat(parameters('ServerPrefix'),copyIndex(),'ADFSServer')]",
+      "type": "Microsoft.Compute/virtualMachines",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "copy": {
+        "name": "adfsservercopy",
+        "count": "[parameters('NumberOfADFSServers')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Storage/storageAccounts/', variables('adfsstorageName'))]",
+        "[concat('Microsoft.Network/networkInterfaces/', parameters('ServerPrefix'),copyIndex(),'ADFSNetworkInterface')]",
+        "[concat('Microsoft.Compute/availabilitySets/','adfsfs')]"
+      ],
+      "tags": {
+        "displayName": "ADFS Server"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('adfsVmSize')]"
+        },
+        "availabilitySet": {
+          "id": "[resourceId('Microsoft.Compute/availabilitySets','adfsfs')]"
+        },
+        "osProfile": {
+          "computerName": "[concat(parameters('ServerPrefix'),'ADFS',copyIndex())]",
+          "adminUsername": "[parameters('adminUserName')]",
+          "adminPassword": "[parameters('adminPassword')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('adfsImagePublisher')]",
+            "offer": "[variables('adfsImageOffer')]",
+            "sku": "[parameters('windowsOSVersion')]",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "fs1vmOSDisk",
+            "vhd": {
+              "uri": "[concat('https://', variables('adfsstorageName'), '.blob.core.windows.net/', variables('adfsStorageAccountContainerName'), '/', variables('adfsOSDiskName'),copyIndex(), '.vhd')]"
+            },
+            "caching": "ReadWrite",
+            "createOption": "FromImage"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces',concat(parameters('ServerPrefix'),copyIndex(),'ADFSNetworkInterface'))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "[concat(parameters('ServerPrefix'),copyIndex(),'DCNetworkInterface')]",
+      "type": "Microsoft.Network/networkInterfaces",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "copy": {
+        "name": "dcniccopy",
+        "count": "[parameters('NumberOfDCs')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Network/virtualNetworks/', 'adfsvnet')]"
+      ],
+      "tags": {
+        "displayName": "DC Network Interface"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[variables('dcSubnetRef')]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "[concat(parameters('ServerPrefix'),copyIndex(),'DCServer')]",
+      "type": "Microsoft.Compute/virtualMachines",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "copy": {
+        "name": "dcservercopy",
+        "count": "[parameters('NumberOfDCs')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Storage/storageAccounts/', variables('adfsstorageName'))]",
+        "[concat('Microsoft.Network/networkInterfaces/', parameters('ServerPrefix'),copyIndex(),'DCNetworkInterface')]",
+        "[concat('Microsoft.Compute/availabilitySets/','adfsdc')]"
+      ],
+      "tags": {
+        "displayName": "DC Server"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('adfsVmSize')]"
+        },
+        "availabilitySet": {
+          "id": "[resourceId('Microsoft.Compute/availabilitySets','adfsdc')]"
+        },
+        "osProfile": {
+          "computerName": "[concat(parameters('ServerPrefix'),'DCServer',copyIndex())]",
+          "adminUsername": "[parameters('adminUserName')]",
+          "adminPassword": "[parameters('adminPassword')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('adfsImagePublisher')]",
+            "offer": "[variables('adfsImageOffer')]",
+            "sku": "[parameters('windowsOSVersion')]",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "dc1vmOSDisk",
+            "vhd": {
+              "uri": "[concat('https://', variables('adfsstorageName'), '.blob.core.windows.net/', variables('adfsStorageAccountContainerName'), '/', variables('dcOSDiskName'),copyIndex(), '.vhd')]"
+            },
+            "caching": "ReadWrite",
+            "createOption": "FromImage"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(parameters('ServerPrefix'),copyIndex(),'DCNetworkInterface'))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "apiVersion": "2015-06-15",
+      "name": "[variables('frontEndLoadBalancerName')]",
+      "type": "Microsoft.Network/loadBalancers",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[concat('Microsoft.Network/publicIPAddresses/', variables('publicIPAddressName'))]"
+      ],
+      "tags": {
+        "displayName": "Frontend Load Balancer"
+      },
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "name": "LoadBalancerFrontend",
+            "properties": {
+              "publicIPAddress": {
+                "id": "[variables('publicIPAddressID')]"
+              }
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "LoadBalancerBackend"
+          }
+        ],
+        "loadBalancingRules": [
+          {
+            "name": "Web",
+            "properties": {
+              "frontendIPConfiguration": {
+                "id": "[variables('frontEndLoadBalancerIPConfigID')]"
+              },
+              "frontendPort": 80,
+              "backendPort": 80,
+              "enableFloatingIP": false,
+              "idleTimeoutInMinutes": 4,
+              "protocol": "Tcp",
+              "loadDistribution": "Default",
+              "backendAddressPool": {
+                "id": "[concat(variables('frontEndLoadBalancerId'),'/backendAddressPools/LoadBalancerBackend')]"
+              }
+            }
+          }
+        ],
+        "probes": [
+          {
+            "name": "web",
+            "properties": {
+              "protocol": "Http",
+              "port": 80,
+              "requestPath": "/",
+              "intervalInSeconds": 5,
+              "numberOfProbes": 2
+            }
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "2015-06-15",
+      "name": "[variables('internalLoadBalancerName')]",
+      "type": "Microsoft.Network/loadBalancers",
+      "location": "[resourceGroup().location]",
+      "dependsOn": [
+        "[variables('vnetID')]"
+      ],
+      "tags": {
+        "displayName": "Internal Load Balancer"
+      },
+      "properties": {
+        "frontendIPConfigurations": [
+          {
+            "name": "LoadBalancerFrontend",
+            "properties": {
+              "subnet": {
+                "id": "[variables('adfsSubnetRef')]"
+              },
+              "privateIPAddress": "10.0.1.6",
+              "privateIPAllocationMethod": "Static"
+            }
+          }
+        ],
+        "backendAddressPools": [
+          {
+            "name": "ADFSLoadBalancerBackend"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.Compute/virtualMachines/extensions",
+      "name": "[concat(parameters('ServerPrefix'),copyIndex(),'ProxyServer/dscExtension')]",
+      "apiVersion": "2015-05-01-preview",
+      "location": "[resourceGroup().location]",
+      "copy": {
+        "name": "dcscopy",
+        "count": "[parameters('NumberOfProxyServers')]"
+      },
+      "dependsOn": [
+        "[concat('Microsoft.Compute/virtualMachines/', parameters('ServerPrefix'),copyIndex(),'ProxyServer')]"
+      ],
+      "tags": {
+        "displayName": "Proxy Server DSC"
+      },
+      "properties": {
+        "publisher": "Microsoft.Powershell",
+        "type": "DSC",
+        "typeHandlerVersion": "2.17",
+        "settings": {
+          "ModulesUrl": "https://github.com/Azure/azure-quickstart-templates/raw/master/dsc-extension-iis-server-windows-vm/ContosoWebsite.ps1.zip",
+          "ConfigurationFunction": "ContosoWebsite.ps1\\ContosoWebsite",
+          "Properties": {
+            "MachineName": "[concat(parameters('ServerPrefix'),'Proxy',copyIndex())]"
+          }
+        },
+        "protectedSettings": null
+      }
+    },
+    {
+      "name": "[concat(parameters('ServerPrefix'),'mgmtNetworkInterface')]",
+      "type": "Microsoft.Network/networkInterfaces",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "dependsOn": [
+        "[concat('Microsoft.Network/virtualNetworks/', 'adfsvnet')]"
+      ],
+      "tags": {
+        "displayName": "MGMT Network Interface"
+      },
+      "properties": {
+        "ipConfigurations": [
+          {
+            "name": "ipconfig1",
+            "properties": {
+              "privateIPAllocationMethod": "Dynamic",
+              "subnet": {
+                "id": "[variables('mgmtSubnetRef')]"
+              },
+              "publicIPAddress": {
+                "id": "[resourceId('Microsoft.Network/publicIPAddresses','RDPPublicIP')]"
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "[concat(parameters('ServerPrefix'),'mgmtServer')]",
+      "type": "Microsoft.Compute/virtualMachines",
+      "location": "[resourceGroup().location]",
+      "apiVersion": "2015-06-15",
+      "dependsOn": [
+        "[concat('Microsoft.Storage/storageAccounts/', variables('adfsstorageName'))]",
+        "[concat('Microsoft.Network/networkInterfaces/', parameters('ServerPrefix'),'mgmtNetworkInterface')]"
+      ],
+      "tags": {
+        "displayName": "MGMT Server"
+      },
+      "properties": {
+        "hardwareProfile": {
+          "vmSize": "[parameters('adfsVmSize')]"
+        },
+        "osProfile": {
+          "computerName": "[concat(parameters('ServerPrefix'),'MgmtServer')]",
+          "adminUsername": "[parameters('adminUserName')]",
+          "adminPassword": "[parameters('adminPassword')]"
+        },
+        "storageProfile": {
+          "imageReference": {
+            "publisher": "[variables('adfsImagePublisher')]",
+            "offer": "[variables('adfsImageOffer')]",
+            "sku": "[parameters('windowsOSVersion')]",
+            "version": "latest"
+          },
+          "osDisk": {
+            "name": "mgmtvmOSDisk",
+            "vhd": {
+              "uri": "[concat('https://', variables('adfsstorageName'), '.blob.core.windows.net/', variables('adfsStorageAccountContainerName'), '/', variables('mgmtOSDiskName'), '.vhd')]"
+            },
+            "caching": "ReadWrite",
+            "createOption": "FromImage"
+          }
+        },
+        "networkProfile": {
+          "networkInterfaces": [
+            {
+              "id": "[resourceId('Microsoft.Network/networkInterfaces', concat(parameters('ServerPrefix'),'mgmtNetworkInterface'))]"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "proxyNSG",
+      "apiVersion": "2016-03-30",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "HTTPIn",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "80",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "HTTPSIn",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "443",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 101,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "DenySubnetToSubnet",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "access": "Deny",
+              "priority": 4000,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "RDPFromMGMT",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "3389",
+              "sourceAddressPrefix": "10.0.3.0/24",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 200,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "HTTPOut",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "80",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "Internet",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Outbound"
+            }
+          },
+          {
+            "name": "HTTPSOut",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "443",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "Internet",
+              "access": "Allow",
+              "priority": 101,
+              "direction": "Outbound"
+            }
+          },
+
+          {
+            "name": "LicensingManagement",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "1688",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 3900,
+              "direction": "Outbound"
+            }
+          },
+          {
+            "name": "DenyInternetOutbound",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "Internet",
+              "access": "Deny",
+              "priority": 4000,
+              "direction": "Outbound"
+            }
+          },
+          {
+            "name": "HTTPSProxyToADFS",
+            "properties": {
+              "description": "",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "443",
+              "sourceAddressPrefix": "10.0.0.0/24",
+              "destinationAddressPrefix": "10.0.1.0/24",
+              "access": "Allow",
+              "priority": 300,
+              "direction": "Outbound"
+            }
+          },
+          {
+            "name": "DenyVNetToVNet",
+            "properties": {
+              "description": "",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "access": "Deny",
+              "priority": 3950,
+              "direction": "Outbound"
+            }
+          }
+        ]
+      },
+      "dependsOn": [ ]
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "adfsNSG",
+      "apiVersion": "2016-03-30",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+            {
+                "name": "HTTPS",
+                "properties": {
+                    "protocol": "*",
+                    "sourcePortRange": "*",
+                    "destinationPortRange": "443",
+                    "sourceAddressPrefix": "10.0.0.0/24",
+                    "destinationAddressPrefix": "*",
+                    "access": "Allow",
+                    "priority": 100,
+                    "direction": "Inbound"
+                }
+            },
+            {
+                "name": "DenySubnetToSubnet",
+                "properties": {
+                    "protocol": "*",
+                    "sourcePortRange": "*",
+                    "destinationPortRange": "*",
+                    "sourceAddressPrefix": "VirtualNetwork",
+                    "destinationAddressPrefix": "VirtualNetwork",
+                    "access": "Deny",
+                    "priority": 4000,
+                    "direction": "Inbound"
+                }
+            },
+            {
+                "name": "RDPFromMGMT",
+                "properties": {
+                    "protocol": "*",
+                    "sourcePortRange": "*",
+                    "destinationPortRange": "3389",
+                    "sourceAddressPrefix": "10.0.3.0/24",
+                    "destinationAddressPrefix": "*",
+                    "access": "Allow",
+                    "priority": 200,
+                    "direction": "Inbound"
+                }
+            },
+            {
+                "name": "LicensingManagement",
+                "properties": {
+                    "protocol": "*",
+                    "sourcePortRange": "*",
+                    "destinationPortRange": "1688",
+                    "sourceAddressPrefix": "*",
+                    "destinationAddressPrefix": "*",
+                    "access": "Allow",
+                    "priority": 3900,
+                    "direction": "Outbound"
+                }
+            },
+            {
+                "name": "DenyInternetOutbound",
+              "properties": {
+                "protocol": "*",
+                "sourcePortRange": "*",
+                "destinationPortRange": "*",
+                "sourceAddressPrefix": "*",
+                "destinationAddressPrefix": "Internet",
+                "access": "Deny",
+                "priority": 4000,
+                "direction": "Outbound"
+              }
+            },
+            {
+                "name": "DenyVnetToVnet",
+                "properties": {
+                    "description": "",
+                    "protocol": "*",
+                    "sourcePortRange": "*",
+                    "destinationPortRange": "*",
+                    "sourceAddressPrefix": "VirtualNetwork",
+                    "destinationAddressPrefix": "VirtualNetwork",
+                    "access": "Deny",
+                    "priority": 3950,
+                    "direction": "Outbound"
+                }
+            }
+        ]
+      },
+      "dependsOn": [ ]
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "dcNSG",
+      "apiVersion": "2016-03-30",
+      "location": "[resourceGroup().location]",
+      "properties": {
+          "securityRules": [
+              {
+                  "name": "DenySubnetToSubnet",
+                  "properties": {
+                      "protocol": "*",
+                      "sourcePortRange": "*",
+                      "destinationPortRange": "*",
+                      "sourceAddressPrefix": "VirtualNetwork",
+                      "destinationAddressPrefix": "VirtualNetwork",
+                      "access": "Deny",
+                      "priority": 4000,
+                      "direction": "Inbound"
+                  }
+              },
+              {
+                  "name": "RDPFromMGMT",
+                  "properties": {
+                      "protocol": "*",
+                      "sourcePortRange": "*",
+                      "destinationPortRange": "3389",
+                      "sourceAddressPrefix": "10.0.3.0/24",
+                      "destinationAddressPrefix": "*",
+                      "access": "Allow",
+                      "priority": 200,
+                      "direction": "Inbound"
+                  }
+              },
+              {
+                  "name": "LicensingManagement",
+                  "properties": {
+                      "protocol": "*",
+                      "sourcePortRange": "*",
+                      "destinationPortRange": "1688",
+                      "sourceAddressPrefix": "*",
+                      "destinationAddressPrefix": "*",
+                      "access": "Allow",
+                      "priority": 3900,
+                      "direction": "Outbound"
+                  }
+              },
+              {
+                  "name": "DenyInternetOutbound",
+                "properties": {
+                  "protocol": "*",
+                  "sourcePortRange": "*",
+                  "destinationPortRange": "*",
+                  "sourceAddressPrefix": "*",
+                  "destinationAddressPrefix": "Internet",
+                  "access": "Deny",
+                  "priority": 4000,
+                  "direction": "Outbound"
+                }
+              },
+              {
+                  "name": "DenyVnetToVnet",
+                  "properties": {
+                      "description": "",
+                      "protocol": "*",
+                      "sourcePortRange": "*",
+                      "destinationPortRange": "*",
+                      "sourceAddressPrefix": "AzureLoadBalancer",
+                      "destinationAddressPrefix": "VirtualNetwork",
+                      "access": "Deny",
+                      "priority": 3950,
+                      "direction": "Outbound"
+                  }
+              }
+          ]
+      },
+      "dependsOn": [ ]
+    },
+    {
+      "type": "Microsoft.Network/networkSecurityGroups",
+      "name": "mgmtNSG",
+      "apiVersion": "2016-03-30",
+      "location": "[resourceGroup().location]",
+      "properties": {
+        "securityRules": [
+          {
+            "name": "RDPFromInternet",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "3389",
+              "sourceAddressPrefix": "Internet",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "DenySubnetToSubnet",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "access": "Deny",
+              "priority": 4000,
+              "direction": "Inbound"
+            }
+          },
+          {
+            "name": "DenyInternetOutbound",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "Internet",
+              "access": "Deny",
+              "priority": 102,
+              "direction": "Outbound"
+            }
+          },
+          {
+            "name": "DenyVNETOutbound",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "*",
+              "sourceAddressPrefix": "VirtualNetwork",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "access": "Deny",
+              "priority": 200,
+              "direction": "Outbound"
+            }
+          },
+          {
+            "name": "RDPtoVNets",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "3389",
+              "sourceAddressPrefix": "10.0.3.0/24",
+              "destinationAddressPrefix": "VirtualNetwork",
+              "access": "Allow",
+              "priority": 103,
+              "direction": "Outbound"
+            }
+          },
+          {
+            "name": "Licensing",
+            "properties": {
+              "description": "",
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "1688",
+              "sourceAddressPrefix": "*",
+              "destinationAddressPrefix": "Internet",
+              "access": "Allow",
+              "priority": 100,
+              "direction": "Outbound"
+            }
+          },
+          {
+            "name": "HostRule",
+            "properties": {
+              "protocol": "*",
+              "sourcePortRange": "*",
+              "destinationPortRange": "80",
+              "sourceAddressPrefix": "168.63.129.16/1",
+              "destinationAddressPrefix": "*",
+              "access": "Allow",
+              "priority": 101,
+              "direction": "Inbound"
+            }
+          }
+        ]
+      },
+      "dependsOn": [ ]
+    }
+  ],
+  "outputs": {
+      }
+    }
